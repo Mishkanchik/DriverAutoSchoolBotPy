@@ -12,10 +12,9 @@ from telebot.types import (
 )
 
 # ================== НАСТРОЙКИ ==================
-# ОБОВ'ЯЗКОВО: задай токен через змінну середовища!
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен python bot.py")
+    raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен")
 
 BOT_NAME = "DriverAutoSchool_bot"  # без @
 CURATOR_ID = 761584410  # твій Telegram ID
@@ -59,7 +58,6 @@ def save_data():
     except Exception as e:
         print(f"⚠️ Помилка збереження даних: {e}")
 
-# Завантажуємо при старті
 load_data()
 
 # ================== КЛАВІАТУРИ ==================
@@ -136,7 +134,6 @@ def start(message):
         bot.reply_to(message, "⛔ Це посилання вже було використано")
         return
 
-    # Активуємо доступ
     invite_codes[code] = chat_id
     user_access_time[chat_id] = time.time()
     user_states[chat_id] = None
@@ -159,7 +156,6 @@ def handle_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
 
-    # Перевірка доступу
     if not is_access_valid(chat_id):
         bot.reply_to(
             message,
@@ -167,7 +163,6 @@ def handle_messages(message):
         )
         return
 
-    # ===== РЕЖИМ ПІДТРИМКИ =====
     if text == 'Куратор ➡️':
         user_states[chat_id] = 'support'
         bot.reply_to(
@@ -195,7 +190,6 @@ def handle_messages(message):
         user_states[chat_id] = None
         return
 
-    # ===== ВІДПОВІДЬ ВІД КУРАТОРА =====
     if chat_id == CURATOR_ID and curator_reply_to.get(chat_id):
         user_id = curator_reply_to.pop(chat_id)
         bot.send_message(
@@ -205,7 +199,6 @@ def handle_messages(message):
         bot.send_message(CURATOR_ID, "✅ Відповідь успішно надіслано учню")
         return
 
-    # ===== ГОЛОВНЕ МЕНЮ =====
     if text.startswith('Урок '):
         bot.reply_to(message, f"{text} 🚀\n\nТут буде матеріал уроку...", reply_markup=get_main_keyboard())
     elif text == 'Бонуси 🎁':
@@ -232,10 +225,52 @@ def handle_reply(call):
         text=f"✍️ Напиши відповідь користувачу (ID: {user_id}):"
     )
 
+# ================== WEBHOOK З FLASK ==================
+from flask import Flask, request, abort
+import threading
+
+app = Flask(__name__)
+
+WEBHOOK_PATH = f"/{TOKEN}"
+
+@app.route('/')
+def index():
+    return "Бот автошколи працює! 🚀"
+
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        abort(403)
+
+def set_webhook():
+    webhook_url = os.getenv("WEBHOOK_URL")
+    if webhook_url:
+        full_url = webhook_url.rstrip("/") + WEBHOOK_PATH
+        bot.remove_webhook()
+        time.sleep(1)
+        result = bot.set_webhook(url=full_url)
+        if result:
+            print(f"✅ Webhook успішно встановлено: {full_url}")
+        else:
+            print("❌ Не вдалося встановити webhook")
+    else:
+        print("⚠️ WEBHOOK_URL не задано — бот працюватиме в режимі polling (тільки для локального тестування)")
+
 # ================== ЗАПУСК ==================
-print("🚀 Бот запущений і готовий до роботи!")
-try:
-    bot.infinity_polling(none_stop=True)
-except Exception as e:
-    print(f"❌ Критична помилка: {e}")
-    time.sleep(5)
+if __name__ == '__main__':
+    threading.Thread(target=set_webhook).start()
+
+    # Для локального тестування без webhook можна розкоментувати:
+    # bot.infinity_polling(none_stop=True)
+
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Бот запущено на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
+else:
+    # Якщо запускається через gunicorn (наприклад на Render)
+    set_webhook()
