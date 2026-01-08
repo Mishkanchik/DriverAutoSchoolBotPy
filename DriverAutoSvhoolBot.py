@@ -2,6 +2,8 @@ import telebot
 import time
 import secrets
 import string
+import json
+import os
 from telebot.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -10,21 +12,55 @@ from telebot.types import (
 )
 
 # ================== НАСТРОЙКИ ==================
-TOKEN = "8524982503:AAEjMRxOCclieQANRwhpzAzujJOk1Gg4xdQ"
-BOT_NAME = "DriverAutoSchool_bot"  # без @
-CURATOR_ID = 761584410
+# ОБОВ'ЯЗКОВО: задай токен через змінну середовища!
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен python bot.py")
 
-ACCESS_TIME = 90 * 24 * 60 * 60  # 3 місяці
+BOT_NAME = "DriverAutoSchool_bot"  # без @
+CURATOR_ID = 761584410  # твій Telegram ID
+
+ACCESS_TIME = 90 * 24 * 60 * 60  # 90 днів = 3 місяці
 
 bot = telebot.TeleBot(TOKEN)
 
-# ================== СХОВИЩА ==================
-user_states = {}
-user_access_time = {}
-curator_reply_to = {}
+# ================== ФАЙЛ ДАНИХ ==================
+DATA_FILE = "bot_data.json"
 
-# invite_code: user_id (None = ще не використаний)
-invite_codes = {}
+# ================== СХОВИЩА ==================
+user_states = {}          # стани користувачів (наприклад, підтримка)
+user_access_time = {}     # час активації доступу
+curator_reply_to = {}     # для відповіді куратора
+invite_codes = {}         # код: user_id (None = не використано)
+
+# ================== ЗАВАНТАЖЕННЯ ДАНИХ ==================
+def load_data():
+    global invite_codes, user_access_time
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                invite_codes = {k: v if v is not None else None for k, v in data.get("invite_codes", {}).items()}
+                user_access_time = data.get("user_access_time", {})
+                print("✅ Дані завантажено з файлу")
+        except Exception as e:
+            print(f"⚠️ Помилка завантаження даних: {e}")
+    else:
+        print("📄 Файл даних не знайдено — створено нові сховища")
+
+def save_data():
+    try:
+        data = {
+            "invite_codes": {k: v for k, v in invite_codes.items()},
+            "user_access_time": user_access_time
+        }
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"⚠️ Помилка збереження даних: {e}")
+
+# Завантажуємо при старті
+load_data()
 
 # ================== КЛАВІАТУРИ ==================
 def get_main_keyboard():
@@ -50,142 +86,156 @@ def get_curator_keyboard(user_id):
 
 # ================== ДОПОМІЖНЕ ==================
 def is_access_valid(chat_id):
+    if chat_id == CURATOR_ID:
+        return True
     start_time = user_access_time.get(chat_id)
     if not start_time:
         return False
     return time.time() - start_time <= ACCESS_TIME
 
 def generate_invite_code():
-    return ''.join(
-        secrets.choice(string.ascii_letters + string.digits)
-        for _ in range(12)
-    )
+    return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
 
-# ================== /newlink ==================
+# ================== КОМАНДИ ==================
 @bot.message_handler(commands=['newlink'])
 def new_link(message):
-    if message.chat.id != CURATOR_ID:
+    if message.from_user.id != CURATOR_ID:
+        bot.reply_to(message, "⛔ Доступ заборонено")
         return
 
     code = generate_invite_code()
     invite_codes[code] = None
+    save_data()
 
     link = f"https://t.me/{BOT_NAME}?start={code}"
 
     bot.reply_to(
         message,
-        f"🔗 Одноразове посилання (3 місяці):\n{link}"
+        f"🔗 Нове одноразове посилання (дійсне 3 місяці):\n\n{link}"
     )
 
-# ================== /start ==================
 @bot.message_handler(commands=['start'])
 def start(message):
-    args = message.text.split()
+    args = message.text.split(maxsplit=1)
+    chat_id = message.chat.id
 
-    if len(args) < 2:
-        bot.reply_to(
-            message,
-            "⛔ Вхід тільки через спеціальне посилання 🔗"
+    if len(args) < 2 or not args[1].strip():
+        bot.send_message(
+            chat_id,
+            "👋 Вітаю в боті автошколи!\n\n⛔ Вхід можливий тільки за спеціальним одноразовим посиланням від куратора 🔗"
         )
         return
 
-    code = args[1]
+    code = args[1].strip()
 
     if code not in invite_codes:
-        bot.reply_to(message, "⛔ Посилання недійсне")
+        bot.reply_to(message, "⛔ Посилання недійсне або застаріле")
         return
 
     if invite_codes[code] is not None:
-        bot.reply_to(message, "⛔ Це посилання вже використане")
+        bot.reply_to(message, "⛔ Це посилання вже було використано")
         return
 
-    invite_codes[code] = message.chat.id
-    user_access_time[message.chat.id] = time.time()
-    user_states[message.chat.id] = None
+    # Активуємо доступ
+    invite_codes[code] = chat_id
+    user_access_time[chat_id] = time.time()
+    user_states[chat_id] = None
+    save_data()
 
-    bot.reply_to(
-        message,
-        "✅ Доступ активовано на 3 місяці!\nОбери урок 👇",
+    bot.send_message(
+        chat_id,
+        "✅ Доступ успішно активовано!\nТермін дії: 3 місяці з сьогодні\n\nОбери урок або розділ 👇",
         reply_markup=get_main_keyboard()
     )
 
-# ================== ПОВІДОМЛЕННЯ ==================
+@bot.message_handler(commands=['menu', 'help'])
+def send_menu(message):
+    if is_access_valid(message.chat.id):
+        bot.send_message(message.chat.id, "👇 Головне меню", reply_markup=get_main_keyboard())
+
+# ================== ОБРОБКА ПОВІДОМЛЕНЬ ==================
 @bot.message_handler(func=lambda message: True)
 def handle_messages(message):
     chat_id = message.chat.id
-    text = message.text
+    text = message.text.strip() if message.text else ""
 
-    # перевірка доступу
-    if chat_id != CURATOR_ID and not is_access_valid(chat_id):
+    # Перевірка доступу
+    if not is_access_valid(chat_id):
         bot.reply_to(
             message,
-            "⛔ Твій доступ завершився.\nОтримай нове посилання 🔗"
+            "⛔ Твій доступ закінчився.\nЗвернись до куратора за новим посиланням 🔗"
         )
         return
 
-    # ===== КУРАТОР =====
+    # ===== РЕЖИМ ПІДТРИМКИ =====
     if text == 'Куратор ➡️':
         user_states[chat_id] = 'support'
         bot.reply_to(
             message,
-            "💬 Напиши повідомлення куратору 👇",
+            "💬 Напиши своє питання чи повідомлення куратору 👇\n(Після надсилання ти повернешся в меню)",
             reply_markup=get_main_keyboard()
         )
         return
 
     if user_states.get(chat_id) == 'support' and chat_id != CURATOR_ID:
-        username = f"@{message.from_user.username}" if message.from_user.username else "немає username"
-        full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
+        username = f"@{message.from_user.username}" if message.from_user.username else "(немає username)"
+        full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or "Невідомо"
 
-        bot.send_message(
-            CURATOR_ID,
-            f"📩 Нове звернення\n👤 {full_name}\n{username}\n🆔 {chat_id}"
-        )
+        info_text = f"📩 Нове звернення від учня:\n\n👤 {full_name}\n{username}\n🆔 ID: {chat_id}"
+
+        bot.send_message(CURATOR_ID, info_text)
         bot.forward_message(CURATOR_ID, chat_id, message.message_id)
         bot.send_message(
             CURATOR_ID,
-            "Натисни для відповіді 👇",
+            "Натисни кнопку нижче, щоб відповісти 👇",
             reply_markup=get_curator_keyboard(chat_id)
         )
 
-        bot.reply_to(message, "✅ Повідомлення надіслано куратору")
+        bot.reply_to(message, "✅ Твоє повідомлення надіслано куратору!\nЧекай на відповідь 😊")
         user_states[chat_id] = None
         return
 
+    # ===== ВІДПОВІДЬ ВІД КУРАТОРА =====
     if chat_id == CURATOR_ID and curator_reply_to.get(chat_id):
         user_id = curator_reply_to.pop(chat_id)
         bot.send_message(
             user_id,
-            f"💬 Відповідь від куратора:\n\n{text}"
+            f"💬 Повідомлення від куратора:\n\n{message.text}"
         )
-        bot.send_message(CURATOR_ID, "✅ Відповідь надіслано")
+        bot.send_message(CURATOR_ID, "✅ Відповідь успішно надіслано учню")
         return
 
-    # ===== МЕНЮ =====
-    if text and text.startswith('Урок '):
-        bot.reply_to(message, f"{text} 🚀\nТут буде контент", reply_markup=get_main_keyboard())
+    # ===== ГОЛОВНЕ МЕНЮ =====
+    if text.startswith('Урок '):
+        bot.reply_to(message, f"{text} 🚀\n\nТут буде матеріал уроку...", reply_markup=get_main_keyboard())
     elif text == 'Бонуси 🎁':
-        bot.reply_to(message, "🎁 Бонуси...", reply_markup=get_main_keyboard())
+        bot.reply_to(message, "🎁 Бонуси та додаткові матеріали...\nСкоро тут з'явиться контент!", reply_markup=get_main_keyboard())
     elif text == 'Книга 📕':
-        bot.reply_to(message, "📖 Книга...", reply_markup=get_main_keyboard())
+        bot.reply_to(message, "📖 Посібник з ПДР та навчання...\nСкоро додамо!", reply_markup=get_main_keyboard())
     else:
-        bot.reply_to(message, "Обери пункт меню 👇", reply_markup=get_main_keyboard())
+        bot.reply_to(message, "👇 Будь ласка, обери пункт з меню нижче", reply_markup=get_main_keyboard())
 
 # ================== CALLBACK ==================
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
 def handle_reply(call):
-    if call.message.chat.id != CURATOR_ID:
+    if call.from_user.id != CURATOR_ID:
+        bot.answer_callback_query(call.id, "⛔ Доступ заборонено")
         return
 
     user_id = int(call.data.split('_')[1])
     curator_reply_to[CURATOR_ID] = user_id
 
-    bot.answer_callback_query(call.id, "Режим відповіді")
-    bot.send_message(
-        CURATOR_ID,
-        f"✍️ Напиши відповідь користувачу (ID: {user_id})"
+    bot.answer_callback_query(call.id, "Режим відповіді активовано")
+    bot.edit_message_text(
+        chat_id=CURATOR_ID,
+        message_id=call.message.message_id,
+        text=f"✍️ Напиши відповідь користувачу (ID: {user_id}):"
     )
 
 # ================== ЗАПУСК ==================
-print("Бот запущений 🚀")
-bot.infinity_polling()
+print("🚀 Бот запущений і готовий до роботи!")
+try:
+    bot.infinity_polling(none_stop=True)
+except Exception as e:
+    print(f"❌ Критична помилка: {e}")
+    time.sleep(5)
