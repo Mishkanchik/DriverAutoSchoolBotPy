@@ -10,11 +10,11 @@ from telebot.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
-from flask import Flask, request, abort
-import threading
 
 # ================== НАСТРОЙКИ ==================
-TOKEN = "8524982503:AAHgTQHCWAU-P5tFZExa1q8FlV8AWL9LA1k"
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен")
 
 BOT_NAME = "DriverAutoSchool_bot"  # без @
 CURATOR_ID = 761584410  # твій Telegram ID
@@ -226,6 +226,8 @@ def handle_reply(call):
     )
 
 # ================== WEBHOOK З FLASK ==================
+from flask import Flask, request, abort
+import threading
 
 app = Flask(__name__)
 
