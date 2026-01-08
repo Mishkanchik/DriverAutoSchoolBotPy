@@ -109,13 +109,23 @@ def new_link(message):
 
     bot.reply_to(
         message,
-        f"🔗 Нове одноразове посилання (дійсне 3 місяці):\n\n{link}"
+        f"🔗 Нове одноразове посилання (дійсне 3 місяці):\n\n{link}",
+        reply_markup=get_main_keyboard()
     )
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    args = message.text.split(maxsplit=1)
     chat_id = message.chat.id
+    args = message.text.split(maxsplit=1)
+
+    # Куратор може просто написати /start і отримати меню
+    if chat_id == CURATOR_ID:
+        bot.send_message(
+            chat_id,
+            "👑 Ви увійшли як куратор!\n\nОбери дію 👇",
+            reply_markup=get_main_keyboard()
+        )
+        return
 
     if len(args) < 2 or not args[1].strip():
         bot.send_message(
@@ -147,8 +157,9 @@ def start(message):
 
 @bot.message_handler(commands=['menu', 'help'])
 def send_menu(message):
-    if is_access_valid(message.chat.id):
-        bot.send_message(message.chat.id, "👇 Головне меню", reply_markup=get_main_keyboard())
+    chat_id = message.chat.id
+    if chat_id == CURATOR_ID or is_access_valid(chat_id):
+        bot.send_message(chat_id, "👇 Головне меню", reply_markup=get_main_keyboard())
 
 # ================== ОБРОБКА ПОВІДОМЛЕНЬ ==================
 @bot.message_handler(func=lambda message: True)
@@ -156,13 +167,29 @@ def handle_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
 
+    # ===== КУРАТОР — ЗАВЖДИ МАЄ ДОСТУП І МЕНЮ =====
+    if chat_id == CURATOR_ID:
+        if text.startswith('Урок '):
+            bot.reply_to(message, f"{text} 🚀\n\nТут буде матеріал уроку... (перегляд від куратора)", reply_markup=get_main_keyboard())
+        elif text == 'Бонуси 🎁':
+            bot.reply_to(message, "🎁 Бонуси та додаткові матеріали...\nСкоро тут з'явиться контент!", reply_markup=get_main_keyboard())
+        elif text == 'Книга 📕':
+            bot.reply_to(message, "📖 Посібник з ПДР та навчання...\nСкоро додамо!", reply_markup=get_main_keyboard())
+        elif text == 'Куратор ➡️':
+            bot.reply_to(message, "👑 Ти і є куратор! 😄\nМожеш писати повідомлення — вони прийдуть тобі ж для тестування.", reply_markup=get_main_keyboard())
+        else:
+            bot.reply_to(message, "👑 Кураторське меню 👇", reply_markup=get_main_keyboard())
+        return
+
+    # ===== ЗВИЧАЙНІ КОРИСТУВАЧІ — ПЕРЕВІРКА ДОСТУПУ =====
     if not is_access_valid(chat_id):
         bot.reply_to(
             message,
-            "⛔ Твій доступ закінчився.\nЗвернись до куратора за новим посиланням 🔗"
+            "⛔ Твій доступ закінчився або не активований.\nЗвернись до куратора за новим посиланням 🔗"
         )
         return
 
+    # ===== РЕЖИМ ПІДТРИМКИ =====
     if text == 'Куратор ➡️':
         user_states[chat_id] = 'support'
         bot.reply_to(
@@ -172,7 +199,7 @@ def handle_messages(message):
         )
         return
 
-    if user_states.get(chat_id) == 'support' and chat_id != CURATOR_ID:
+    if user_states.get(chat_id) == 'support':
         username = f"@{message.from_user.username}" if message.from_user.username else "(немає username)"
         full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or "Невідомо"
 
@@ -190,15 +217,17 @@ def handle_messages(message):
         user_states[chat_id] = None
         return
 
+    # ===== ВІДПОВІДЬ ВІД КУРАТОРА =====
     if chat_id == CURATOR_ID and curator_reply_to.get(chat_id):
         user_id = curator_reply_to.pop(chat_id)
         bot.send_message(
             user_id,
             f"💬 Повідомлення від куратора:\n\n{message.text}"
         )
-        bot.send_message(CURATOR_ID, "✅ Відповідь успішно надіслано учню")
+        bot.send_message(CURATOR_ID, "✅ Відповідь успішно надіслано учню", reply_markup=get_main_keyboard())
         return
 
+    # ===== ГОЛОВНЕ МЕНЮ ДЛЯ КОРИСТУВАЧІВ =====
     if text.startswith('Урок '):
         bot.reply_to(message, f"{text} 🚀\n\nТут буде матеріал уроку...", reply_markup=get_main_keyboard())
     elif text == 'Бонуси 🎁':
@@ -265,12 +294,8 @@ def set_webhook():
 if __name__ == '__main__':
     threading.Thread(target=set_webhook).start()
 
-    # Для локального тестування без webhook можна розкоментувати:
-    # bot.infinity_polling(none_stop=True)
-
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Бот запущено на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
 else:
-    # Якщо запускається через gunicorn (наприклад на Render)
     set_webhook()
