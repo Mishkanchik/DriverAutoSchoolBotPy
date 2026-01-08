@@ -14,7 +14,6 @@ from telebot.types import (
 # ================== НАСТРОЙКИ ==================
 TOKEN = os.getenv("BOT_TOKEN")
 
-
 if not TOKEN:
     raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен")
 
@@ -31,7 +30,7 @@ DATA_FILE = "bot_data.json"
 # ================== СХОВИЩА ==================
 user_states = {}          # стани користувачів (наприклад, підтримка)
 user_access_time = {}     # час активації доступу
-curator_reply_to = {}     # для відповіді куратора
+curator_reply_to = {}     # CURATOR_ID: user_id — кому зараз відповідає куратор
 invite_codes = {}         # код: user_id (None = не використано)
 
 # ================== ЗАВАНТАЖЕННЯ ДАНИХ ==================
@@ -79,9 +78,8 @@ def get_main_keyboard():
 
 def get_curator_keyboard(user_id):
     markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("Відповісти 📩", callback_data=f"reply_{user_id}")
-    )
+    btn_text = f"Відповісти учню 📩 (ID: {user_id})"
+    markup.add(InlineKeyboardButton(btn_text, callback_data=f"reply_{user_id}"))
     return markup
 
 # ================== ДОПОМІЖНЕ ==================
@@ -185,37 +183,37 @@ def handle_messages(message):
         bot.forward_message(CURATOR_ID, chat_id, message.message_id)
         bot.send_message(
             CURATOR_ID,
-            "📝 Тепер ти можеш відповідати цьому учню.\nПиши повідомлення — вони будуть переслані.",
-            reply_markup=get_curator_keyboard(chat_id)  # кнопка з'явиться і залишиться
+            "📝 Натисни кнопку нижче, щоб відповісти учню 👇",
+            reply_markup=get_curator_keyboard(chat_id)
         )
 
         bot.reply_to(message, "✅ Твоє повідомлення надіслано куратору!\nЧекай на відповідь 😊")
         user_states[chat_id] = None
         return
 
-    # === Куратор відповідає учню (повторно можливе) ===
-    if chat_id == CURATOR_ID and curator_reply_to.get(chat_id) is not None:
-        user_id = curator_reply_to[chat_id]  # НЕ pop — залишаємо!
+    # === Куратор відповідає учню (можна багато разів) ===
+    if chat_id == CURATOR_ID and curator_reply_to.get(CURATOR_ID) is not None:
+        user_id = curator_reply_to[CURATOR_ID]
 
-        # Якщо куратор хоче завершити листування — наприклад, надішле /stop або "Завершити"
+        # Команда завершення
         if text.lower() in ['/stop', 'завершити', 'стоп', 'вихід']:
-            del curator_reply_to[chat_id]
-            bot.send_message(CURATOR_ID, "✅ Листування з учнем завершено. Кнопка відповіді прибрана.")
+            del curator_reply_to[CURATOR_ID]
+            bot.send_message(CURATOR_ID, "✅ Листування завершено. Режим відповіді вимкнено.")
             return
 
-        # Інакше — пересилаємо повідомлення учню
+        # Пересилання повідомлення учню
         bot.send_message(
             user_id,
             f"💬 Повідомлення від куратора:\n\n{text}"
         )
         bot.send_message(
             CURATOR_ID,
-            "✅ Повідомлення успішно надіслано учню.\nМожеш надсилати ще — кнопка залишається активною.\n\n(Щоб завершити: напиши /stop)",
-            reply_markup=get_curator_keyboard(user_id)  # оновлюємо клавіатуру (на випадок зміни імені тощо)
+            "✅ Повідомлення надіслано учню.\nМожеш писати далі — кнопка активна.\n\n(Для завершення: /stop)",
+            reply_markup=get_curator_keyboard(user_id)
         )
         return
 
-    # === Решта меню ===
+    # === Меню учня ===
     if text.startswith('Урок '):
         bot.reply_to(message, f"{text} 🚀\n\nТут буде матеріал уроку...", reply_markup=get_main_keyboard())
     elif text == 'Бонуси 🎁':
@@ -225,7 +223,7 @@ def handle_messages(message):
     else:
         bot.reply_to(message, "👇 Будь ласка, обери пункт з меню нижче", reply_markup=get_main_keyboard())
 
-# ================== CALLBACK ==================
+# ================== CALLBACK — активація відповіді ==================
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
 def handle_reply(call):
     if call.from_user.id != CURATOR_ID:
@@ -233,13 +231,19 @@ def handle_reply(call):
         return
 
     user_id = int(call.data.split('_')[1])
-    curator_reply_to[CURATOR_ID] = user_id
+    curator_reply_to[CURATOR_ID] = user_id  # активуємо або перемикаємо
 
-    bot.answer_callback_query(call.id, "Режим відповіді активовано")
-    bot.edit_message_text(
-        chat_id=CURATOR_ID,
-        message_id=call.message.message_id,
-        text=f"✍️ Напиши відповідь користувачу (ID: {user_id}):"
+    bot.answer_callback_query(call.id, "✅ Режим відповіді активовано")
+
+    # Надсилаємо нове повідомлення — старе з кнопкою залишається!
+    bot.send_message(
+        CURATOR_ID,
+        f"✍️ <b>Ти зараз пишеш учню (ID: {user_id})</b>\n\n"
+        f"Надсилай повідомлення — вони будуть автоматично переслані.\n\n"
+        f"<i>Кнопка нижче завжди активна. Натисни ще раз — якщо захочеш переконатися.</i>\n"
+        f"<i>Щоб завершити: напиши /stop</i>",
+        reply_markup=get_curator_keyboard(user_id),
+        parse_mode="HTML"
     )
 
 # ================== WEBHOOK З FLASK ==================
@@ -276,18 +280,14 @@ def set_webhook():
         else:
             print("❌ Не вдалося встановити webhook")
     else:
-        print("⚠️ WEBHOOK_URL не задано — бот працюватиме в режимі polling (тільки для локального тестування)")
+        print("⚠️ WEBHOOK_URL не задано — бот працюватиме в режимі polling")
 
 # ================== ЗАПУСК ==================
 if __name__ == '__main__':
     threading.Thread(target=set_webhook).start()
 
-    # Для локального тестування без webhook можна розкоментувати:
-    # bot.infinity_polling(none_stop=True)
-
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Бот запущено на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
 else:
-    # Якщо запускається через gunicorn (наприклад на Render)
     set_webhook()
