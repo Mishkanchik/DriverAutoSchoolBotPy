@@ -13,8 +13,6 @@ from telebot.types import (
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = os.getenv("BOT_TOKEN")
-
-
 if not TOKEN:
     raise ValueError("⚠️ Не знайдено BOT_TOKEN! Задай змінну середовища: BOT_TOKEN=твій_токен")
 
